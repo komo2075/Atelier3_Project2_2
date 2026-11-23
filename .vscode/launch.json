@@ -1,0 +1,22 @@
+{
+  "configurations": [
+    {
+      "serverReadyAction": {
+        "pattern": "ADAPT preview: (http://127\\.0\\.0\\.1:[0-9]+)",
+        "action": "openExternally",
+        "uriFormat": "%s"
+      },
+      "runtimeExecutable": "C:\\Program Files\\WindowsApps\\OpenAI.CodexPrimaryRuntime.v26-1119-907-0_26.1119.907.0_x64__3k8sg7r9htsxt\\dependencies\\node\\bin\\node.exe",
+      "type": "node",
+      "program": "${workspaceFolder}/scripts/serve.cjs",
+      "console": "internalConsole",
+      "name": "ADAPT: Run website",
+      "request": "launch",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "cwd": "${workspaceFolder}"
+    }
+  ],
+  "version": "0.2.0"
+}

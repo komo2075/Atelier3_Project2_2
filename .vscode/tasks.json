@@ -1,0 +1,47 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "process",
+      "command": "C:\\Program Files\\WindowsApps\\OpenAI.CodexPrimaryRuntime.v26-1119-907-0_26.1119.907.0_x64__3k8sg7r9htsxt\\dependencies\\node\\bin\\node.exe",
+      "label": "ADAPT: Build",
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "args": [
+        "scripts/build.cjs"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "ADAPT: Preview",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "args": [
+        "scripts/serve.cjs"
+      ],
+      "problemMatcher": [
+        {
+          "background": {
+            "activeOnStart": true,
+            "beginsPattern": "^Phone preview",
+            "endsPattern": "^ADAPT preview:"
+          },
+          "owner": "adapt-preview",
+          "pattern": {
+            "regexp": "^(ERROR): (.*)$",
+            "message": 2
+          }
+        }
+      ],
+      "type": "process",
+      "isBackground": true,
+      "command": "C:\\Program Files\\WindowsApps\\OpenAI.CodexPrimaryRuntime.v26-1119-907-0_26.1119.907.0_x64__3k8sg7r9htsxt\\dependencies\\node\\bin\\node.exe"
+    }
+  ]
+}
