@@ -61,6 +61,45 @@ let livingRoom = null;
 //1.4 version update: Added fitness model loading and interior mode switching. The fitness model is loaded asynchronously and added to the scene when the user selects the "FITNESS" mode. The interior modes can be switched between "LIVING", "GARDEN", and "FITNESS", each with its own unique setup.
 let fitnessModel = null;
 
+
+//1.4 version
+let gardenModel = null;
+
+async function loadGarden() {
+  const loader = new GLTFLoader();
+
+  try {
+    const gltf = await loader.loadAsync(
+      './public/models/Garden.glb'
+    );
+
+    gardenModel = gltf.scene;
+    gardenModel.name = 'GardenComplete';
+
+    // 保留 Blender 原始坐标和比例
+    gardenModel.position.set(0, 0, 0);
+    gardenModel.scale.set(1, 1, 1);
+
+    gardenModel.traverse((child) => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+
+    domeRoot.add(gardenModel);
+
+    syncExperienceModel();
+
+    console.log('Garden loaded successfully');
+
+  } catch (error) {
+    console.error('Failed to load Garden:', error);
+    toast('Garden model failed to load');
+  }
+}
+
+
 async function loadFitness() {
   const loader = new GLTFLoader();
 
@@ -98,26 +137,29 @@ async function loadFitness() {
 
 //1.4 version
 function syncExperienceModel() {
+  const isLiving = currentInteriorMode === 'LIVING';
+  const isGarden = currentInteriorMode === 'GARDEN';
   const isFitness = currentInteriorMode === 'FITNESS';
 
-  // 只显示当前空间的模型
+  // 三个完整空间，只显示选中的一个
+  if (livingRoom) {
+    livingRoom.visible = isLiving;
+  }
+
+  if (gardenModel) {
+    gardenModel.visible = isGarden;
+  }
+
   if (fitnessModel) {
     fitnessModel.visible = isFitness;
   }
 
-  if (livingRoom) {
-    livingRoom.visible = !isFitness &&
-      currentInteriorMode === 'LIVING';
-  }
-
+  // 旧半球和备用结构不再参与视角 1
   if (importedDome) {
-    importedDome.visible = !isFitness;
+    importedDome.visible = false;
   }
 
-  // 永远隐藏代码生成的备用半球
   proceduralShell.visible = false;
-
-  // 隐藏备用地板与装饰圆环
   floor.visible = false;
   floorRings.visible = false;
   baseRing.visible = false;
@@ -135,39 +177,13 @@ function box(w,h,d,x,y,z,color){const m=new THREE.Mesh(new THREE.BoxGeometry(w,h
 function makeInterior(mode) {
   currentInteriorMode = mode;
 
+  // 清除旧的代码生成室内设施
   inside.clear();
 
-  // 同时切换建筑和室内
+  // 切换完整 GLB
   syncExperienceModel();
 
-  if (mode === 'LIVING') {
-    return;
-  }
-
-  if (mode === 'GARDEN') {
-    for (let i = 0; i < 12; i++) {
-      const a = i * 2.4;
-      const x = Math.cos(a) * (0.8 + i * 0.19);
-      const z = Math.sin(a) * (0.8 + i * 0.19);
-
-      box(0.48, 0.35, 0.48, x, 0.2, z, 0x467b6d);
-
-      const plant = new THREE.Mesh(
-        new THREE.ConeGeometry(0.3, 0.7, 7),
-        new THREE.MeshStandardMaterial({
-          color: 0x51c49b
-        })
-      );
-
-      plant.position.set(x, 0.75, z);
-      inside.add(plant);
-    }
-  }
-
-  if (mode === 'FITNESS') {
-    // Fitness 使用导入的完整 GLB 模型
-    return;
-  }
+  console.log('Current experience:', mode);
 }
 
 
@@ -338,6 +354,7 @@ export async function loadDomeGLB(url='./public/models/source-dome.glb') {
 //1.3version
 // Load experience models
 loadLivingRoom();
+loadGarden();
 loadFitness();
 
 
