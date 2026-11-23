@@ -55,6 +55,19 @@ const edgeLights=new THREE.PointLight(0xffffff,0,17);edgeLights.position.set(0,3
 const inside = new THREE.Group();
 domeRoot.add(inside);
 
+
+//1.5 version
+// ===== EXPERIENCE ROOM GROUP =====
+
+// 只存放视角1的三个完整房间模型
+const experienceRoot = new THREE.Group();
+
+experienceRoot.name = 'ExperienceRooms';
+
+// 添加到场景中，与 domeRoot 独立
+scene.add(experienceRoot);
+
+
 let livingRoom = null;
 
 
@@ -87,7 +100,7 @@ async function loadGarden() {
       }
     });
 
-    domeRoot.add(gardenModel);
+    experienceRoot.add(gardenModel);
 
     syncExperienceModel();
 
@@ -122,7 +135,7 @@ async function loadFitness() {
       }
     });
 
-    domeRoot.add(fitnessModel);
+    experienceRoot.add(fitnessModel);
 
     syncExperienceModel();
 
@@ -135,26 +148,51 @@ async function loadFitness() {
 }
 
 
-//1.4 version
+//1.5 version
 function syncExperienceModel() {
-  const isLiving = currentInteriorMode === 'LIVING';
-  const isGarden = currentInteriorMode === 'GARDEN';
-  const isFitness = currentInteriorMode === 'FITNESS';
 
-  // 三个完整空间，只显示选中的一个
+  // 使用独立的视角状态，避免初始化顺序错误
+  const activeView =
+    window.ADAPT_CURRENT_VIEW || 'home';
+
+  // 只有主页和视角1显示完整房间
+  const showExperience =
+    activeView === 'home' ||
+    activeView === 'interior';
+
+  // 直接控制整个房间容器
+  experienceRoot.visible = showExperience;
+
+  // 非视角1时，三个房间全部隐藏
+  if (!showExperience) {
+    if (livingRoom) livingRoom.visible = false;
+    if (gardenModel) gardenModel.visible = false;
+    if (fitnessModel) fitnessModel.visible = false;
+    return;
+  }
+
+  // 房间变形动画期间，不覆盖动画状态
+  if (roomTransition) {
+    return;
+  }
+
+  // 当前选中的房间
   if (livingRoom) {
-    livingRoom.visible = isLiving;
+    livingRoom.visible =
+      currentInteriorMode === 'LIVING';
   }
 
   if (gardenModel) {
-    gardenModel.visible = isGarden;
+    gardenModel.visible =
+      currentInteriorMode === 'GARDEN';
   }
 
   if (fitnessModel) {
-    fitnessModel.visible = isFitness;
+    fitnessModel.visible =
+      currentInteriorMode === 'FITNESS';
   }
 
-  // 旧半球和备用结构不再参与视角 1
+  // 隐藏旧备用半球
   if (importedDome) {
     importedDome.visible = false;
   }
@@ -167,6 +205,582 @@ function syncExperienceModel() {
 
 
 let currentInteriorMode = 'LIVING';
+
+
+//1.5 version
+// ===== EXPERIENCE TRANSFORMATION =====
+//1.5 version
+// ============================================================
+// ADAPT — CINEMATIC SPATIAL RECONFIGURATION
+// Interior view only. Independent of adaptive-system.js.
+// ============================================================
+
+const ROOM_TRANSITION_MS = 5300;
+let roomTransition = null;
+
+const roomBaseTransforms = new WeakMap();
+const cinematicUp = new THREE.Vector3(0, 1, 0);
+
+function getRoomModel(mode) {
+  if (mode === 'LIVING') return livingRoom;
+  if (mode === 'GARDEN') return gardenModel;
+  if (mode === 'FITNESS') return fitnessModel;
+  return null;
+}
+
+function rememberRoomTransform(model) {
+  if (!model || roomBaseTransforms.has(model)) return;
+
+  roomBaseTransforms.set(model, {
+    position: model.position.clone(),
+    quaternion: model.quaternion.clone(),
+    scale: model.scale.clone()
+  });
+}
+
+function restoreRoomTransform(model) {
+  if (!model) return;
+
+  rememberRoomTransform(model);
+
+  const original = roomBaseTransforms.get(model);
+
+  model.position.copy(original.position);
+  model.quaternion.copy(original.quaternion);
+  model.scale.copy(original.scale);
+}
+
+function easeInOutCubic(t) {
+  t = THREE.MathUtils.clamp(t, 0, 1);
+
+  return t < 0.5
+    ? 4 * t * t * t
+    : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function cinematicPhase(now, start, end) {
+  return easeInOutCubic((now - start) / (end - start));
+}
+
+// Clone GLB materials temporarily to protect shared materials.
+function prepareCinematicModel(model, color) {
+  const records = [];
+
+  model.updateWorldMatrix(true, true);
+
+  const box = new THREE.Box3().setFromObject(model);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+
+  const meshes = [];
+
+  model.traverse(obj => {
+    if (obj.isMesh && obj.geometry && obj.material) {
+      meshes.push(obj);
+    }
+  });
+
+  for (const mesh of meshes) {
+    const original = mesh.material;
+
+    const cloned = (
+      Array.isArray(original) ? original : [original]
+    ).map(mat => {
+      const copy = mat.clone();
+      copy.transparent = true;
+      copy.depthWrite = false;
+      return copy;
+    });
+
+    const worldCenter = new THREE.Box3()
+      .setFromObject(mesh)
+      .getCenter(new THREE.Vector3());
+
+    const radial = worldCenter.clone().sub(center);
+    const radius = Math.max(radial.length(), 0.001);
+    const direction = radial.divideScalar(radius);
+
+    const parentQuaternion = mesh.parent
+      .getWorldQuaternion(new THREE.Quaternion())
+      .invert();
+
+    const displacement = direction
+      .multiplyScalar(
+        Math.min(Math.max(size.length() * 0.12, 0.35), 2.2)
+      )
+      .applyQuaternion(parentQuaternion);
+
+    mesh.material = Array.isArray(original)
+      ? cloned
+      : cloned[0];
+
+    records.push({
+      mesh,
+      original,
+      cloned,
+      position: mesh.position.clone(),
+      displacement,
+
+      index: Math.abs(
+        worldCenter.x * 0.31 +
+        worldCenter.y * 0.17 +
+        worldCenter.z * 0.23
+      ) % 1,
+
+      isGlass: cloned.some(m =>
+        m.isMeshPhysicalMaterial &&
+        (m.transmission > 0 || m.opacity < 0.75)
+      ),
+
+      baseOpacity: cloned.map(m => m.opacity),
+
+      baseEmissive: cloned.map(m =>
+        m.emissive?.clone() || null
+      ),
+
+      baseEmissiveIntensity: cloned.map(m =>
+        m.emissiveIntensity || 0
+      )
+    });
+  }
+
+  return {
+    model,
+    records,
+    box,
+    center,
+    size,
+    color
+  };
+}
+
+// Mesh-level holographic decomposition and reconstruction.
+function applyCinematicModel(
+  data,
+  reveal,
+  scatter,
+  glow,
+  wireframe = false
+) {
+  for (const rec of data.records) {
+    const stagger = THREE.MathUtils.clamp(
+      (reveal - rec.index * 0.25) / 0.75,
+      0,
+      1
+    );
+
+    const amount = easeInOutCubic(stagger);
+
+    rec.mesh.position
+      .copy(rec.position)
+      .addScaledVector(
+        rec.displacement,
+        scatter * (1 - amount)
+      );
+
+    rec.cloned.forEach((mat, i) => {
+      mat.opacity = rec.baseOpacity[i] * amount;
+
+      if ('wireframe' in mat) {
+        mat.wireframe =
+          wireframe &&
+          !rec.isGlass &&
+          !!mat.isMeshStandardMaterial;
+      }
+
+      if (mat.emissive && rec.baseEmissive[i]) {
+        mat.emissive
+          .copy(rec.baseEmissive[i])
+          .lerp(data.color, glow);
+
+        mat.emissiveIntensity =
+          rec.baseEmissiveIntensity[i] + glow * 0.8;
+      }
+    });
+  }
+}
+
+// Restore original materials and mesh positions.
+function restoreCinematicModel(data) {
+  if (!data) return;
+
+  for (const rec of data.records) {
+    rec.mesh.position.copy(rec.position);
+    rec.mesh.material = rec.original;
+
+    rec.cloned.forEach(mat => mat.dispose());
+  }
+
+  restoreRoomTransform(data.model);
+}
+
+// Low-cost holographic scanning plane.
+function makeCinematicScan(center, size) {
+  const geometry = new THREE.PlaneGeometry(
+    Math.max(size.x, 1) * 1.16,
+    Math.max(size.z, 1) * 1.16
+  );
+
+  geometry.rotateX(-Math.PI / 2);
+
+  const material = new THREE.MeshBasicMaterial({
+    color: 0x58edff,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending
+  });
+
+  const plane = new THREE.Mesh(geometry, material);
+
+  plane.position.copy(center);
+  plane.renderOrder = 8;
+
+  experienceRoot.add(plane);
+
+  return {
+    plane,
+    geometry,
+    material,
+    center: center.clone(),
+    height: Math.max(size.y, 1)
+  };
+}
+
+function removeCinematicScan(scan) {
+  if (!scan) return;
+
+  experienceRoot.remove(scan.plane);
+  scan.geometry.dispose();
+  scan.material.dispose();
+}
+
+function cinematicBounds(fromModel, toModel) {
+  const a = new THREE.Box3().setFromObject(fromModel);
+  const b = new THREE.Box3().setFromObject(toModel);
+
+  return a.union(b);
+}
+
+// Create camera flight paths from actual GLB dimensions.
+function cinematicCameraPath(
+  bounds,
+  startPosition,
+  startQuaternion
+) {
+  const center = bounds.getCenter(new THREE.Vector3());
+  const size = bounds.getSize(new THREE.Vector3());
+
+  const radius = Math.max(size.length() * 0.5, 2);
+
+  const vfov = THREE.MathUtils.degToRad(camera.fov);
+
+  const hfov = 2 * Math.atan(
+    Math.tan(vfov / 2) * camera.aspect
+  );
+
+  const distance = Math.max(
+    radius / Math.sin(Math.min(vfov, hfov) / 2) * 1.5,
+    8
+  );
+
+  const horizontal = new THREE.Vector3(
+    startPosition.x - center.x,
+    0,
+    startPosition.z - center.z
+  );
+
+  if (horizontal.lengthSq() < 0.01) {
+    horizontal.set(0, 0, 1);
+  }
+
+  horizontal.normalize();
+
+  const point = (angle, mult, height) => {
+    return center.clone()
+      .add(
+        new THREE.Vector3(
+          horizontal.x * Math.cos(angle) -
+          horizontal.z * Math.sin(angle),
+
+          0,
+
+          horizontal.x * Math.sin(angle) +
+          horizontal.z * Math.cos(angle)
+        ).multiplyScalar(distance * mult)
+      )
+      .add(new THREE.Vector3(0, height, 0));
+  };
+
+  const outsideA = point(0.12, 1.08, size.y * 0.27);
+  const outsideB = point(0.92, 1.05, size.y * 0.35);
+  const outsideC = point(1.88, 1.08, size.y * 0.28);
+
+  const pathOut = new THREE.CatmullRomCurve3(
+    [
+      startPosition.clone(),
+      startPosition.clone().lerp(outsideA, 0.32),
+      outsideA
+    ],
+    false,
+    'centripetal'
+  );
+
+  const pathOrbit = new THREE.CatmullRomCurve3(
+    [
+      outsideA,
+      point(0.5, 1.12, size.y * 0.35),
+      outsideB,
+      point(1.42, 1.12, size.y * 0.32),
+      outsideC
+    ],
+    false,
+    'centripetal'
+  );
+
+  const pathIn = new THREE.CatmullRomCurve3(
+    [
+      outsideC,
+
+      outsideC.clone()
+        .lerp(startPosition, 0.38)
+        .add(new THREE.Vector3(0, size.y * 0.1, 0)),
+
+      startPosition.clone()
+    ],
+    false,
+    'centripetal'
+  );
+
+  return {
+    center,
+    pathOut,
+    pathOrbit,
+    pathIn,
+    startPosition: startPosition.clone(),
+    startQuaternion: startQuaternion.clone()
+  };
+}
+
+function cinematicLookAt(position, target) {
+  const dummy = new THREE.Object3D();
+
+  dummy.position.copy(position);
+  dummy.up.copy(cinematicUp);
+  dummy.lookAt(target);
+
+  return dummy.quaternion;
+}
+
+// Camera pull-out, orbital movement and return.
+
+// Keep camera fixed during room reconfiguration.
+// Camera stays in place.
+// Users can freely look around during reconfiguration.
+function updateCinematicCamera(tr, elapsed) {
+  // Camera rotation is controlled by updateCamera().
+  // Do not overwrite its position or quaternion.
+}
+
+// Cancel safely when leaving Interior.
+function cancelRoomTransition() {
+  if (!roomTransition) return;
+
+  const tr = roomTransition;
+  roomTransition = null;
+
+  restoreCinematicModel(tr.oldData);
+  restoreCinematicModel(tr.newData);
+  removeCinematicScan(tr.scan);
+
+  currentInteriorMode = tr.from;
+
+  dragging = false;
+  lastPointer = null;
+
+
+  //1.5 version
+  // Restore selected room button.
+  if (view === 'interior') {
+    document.querySelectorAll('#modes button').forEach(b => {
+      b.classList.toggle(
+        'active',
+        b.textContent === currentInteriorMode
+      );
+    });
+  }
+
+
+syncExperienceModel();
+}
+
+// Begin reconfiguration.
+function startRoomTransition(nextMode) {
+  if (view !== 'interior') return;
+  if (roomTransition) return;
+  if (nextMode === currentInteriorMode) return;
+
+  const fromModel = getRoomModel(currentInteriorMode);
+  const toModel = getRoomModel(nextMode);
+
+  if (!fromModel || !toModel) {
+    toast('Room model is still loading');
+    return;
+  }
+
+  rememberRoomTransform(fromModel);
+  rememberRoomTransform(toModel);
+
+  restoreRoomTransform(fromModel);
+  restoreRoomTransform(toModel);
+
+  const bounds = cinematicBounds(fromModel, toModel);
+
+  const startPosition = camera.position.clone();
+  const startQuaternion = camera.quaternion.clone();
+
+  const oldData = prepareCinematicModel(
+    fromModel,
+    new THREE.Color(0x43e9ff)
+  );
+
+  const newData = prepareCinematicModel(
+    toModel,
+    new THREE.Color(0xb77aff)
+  );
+
+  toModel.visible = false;
+
+  const scan = makeCinematicScan(
+    bounds.getCenter(new THREE.Vector3()),
+    bounds.getSize(new THREE.Vector3())
+  );
+
+  roomTransition = {
+    from: currentInteriorMode,
+    to: nextMode,
+    fromModel,
+    toModel,
+    oldData,
+    newData,
+    scan,
+    start: performance.now(),
+    duration: ROOM_TRANSITION_MS,
+
+    cameraPath: cinematicCameraPath(
+      bounds,
+      startPosition,
+      startQuaternion
+    )
+  };
+
+  transition = null;
+  orbit.enabled = false;
+  dragging = false;
+  lastPointer = null;
+
+  toast(`Reconfiguring space: ${nextMode}`);
+}
+
+// Main animation timeline.
+function updateRoomTransition(now) {
+  if (!roomTransition) return;
+
+  const tr = roomTransition;
+
+  const elapsed = THREE.MathUtils.clamp(
+    now - tr.start,
+    0,
+    tr.duration
+  );
+
+  updateCinematicCamera(tr, elapsed);
+
+  const out = cinematicPhase(elapsed, 1700, 2800);
+  const incoming = cinematicPhase(elapsed, 2350, 3700);
+  const startup = cinematicPhase(elapsed, 0, 700);
+
+  //1.5 version
+  // Keep both buildings at their original scale.
+  tr.fromModel.visible = elapsed < 3350;
+  tr.toModel.visible = elapsed >= 2350;
+
+  restoreRoomTransform(tr.fromModel);
+  restoreRoomTransform(tr.toModel);
+
+  applyCinematicModel(
+    tr.oldData,
+    1 - out,
+    out,
+    elapsed < 1700
+      ? Math.sin(startup * Math.PI) * 0.6
+      : out * 0.8,
+    elapsed >= 1700
+  );
+
+  applyCinematicModel(
+    tr.newData,
+    incoming,
+    1 - incoming,
+    (1 - incoming) * 0.7,
+    elapsed < 3500
+  );
+
+  const scan = tr.scan;
+
+  const scanPulse = elapsed < 1700
+    ? Math.sin(
+        Math.PI *
+        THREE.MathUtils.clamp(elapsed / 1700, 0, 1)
+      )
+    : elapsed < 3700
+      ? Math.sin(
+          Math.PI *
+          THREE.MathUtils.clamp(
+            (elapsed - 1700) / 2000,
+            0,
+            1
+          )
+        )
+      : 0;
+
+  scan.material.opacity = scanPulse * 0.23;
+
+  scan.plane.position.y =
+    scan.center.y -
+    scan.height * 0.55 +
+    scan.height * ((elapsed % 1500) / 1500);
+
+  if (elapsed >= tr.duration) {
+    roomTransition = null;
+
+    restoreCinematicModel(tr.oldData);
+    restoreCinematicModel(tr.newData);
+    removeCinematicScan(tr.scan);
+
+    currentInteriorMode = tr.to;
+
+    camera.position.copy(
+      tr.cameraPath.startPosition
+    );
+
+    camera.quaternion.copy(
+      tr.cameraPath.startQuaternion
+    );
+
+    gyroBase = null;
+
+    syncExperienceModel();
+
+    console.log(
+      'Cinematic room reconfiguration complete:',
+      tr.to
+    );
+  }
+}
+
+
 
 
 function box(w,h,d,x,y,z,color){const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),new THREE.MeshStandardMaterial({color,metalness:.18,roughness:.66}));m.position.set(x,y,z);inside.add(m);return m}
@@ -242,16 +856,217 @@ const actions={
 };
 
 
-function setView(next){view=next;syncExperienceModel();adaptive.setView(next);if(next==='applications')makeEnvironment(adaptive.mode());else makeEnvironment(next==='structure'?'TECHNOLOGY':'ROOFTOP');document.body.classList.toggle('exploring',next!=='home');$('hud').hidden=next==='home';$('home').hidden=next==='home';gyroBase=null;const t=descriptions[next];if(t){$('view-index').textContent=t[0];$('view-title').textContent=t[1];$('view-desc').textContent=t[2];$('modes').replaceChildren();for(const action of actions[next]){const b=document.createElement('button');b.textContent=action;b.onclick=()=>selectAction(action,b);$('modes').appendChild(b)}if(next==='interior')$('modes').firstChild?.classList.add('active');if(next==='applications')for(const b of $('modes').children)b.classList.toggle('active',b.textContent===adaptive.mode())}moveCamera(next);$('hint').textContent=next==='interior'?'DRAG TO LOOK · ENABLE MOTION ON MOBILE':next==='structure'?'SELECT A LAYER · DRAG TO ORBIT':'DRAG TO ORBIT · PINCH TO ZOOM · ENABLE MOTION';}
-function selectAction(action,button){button.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('active'));button.classList.add('active');if(view==='interior'){makeInterior(action);toast(`Interior mode: ${action}. Transition animation placeholder.`)}else if(view==='applications'){makeEnvironment(action);adaptive.context(action)}else{adaptive.selectFunction(action)}}
+//1.5 version
+function setView(next) {
+
+  // 1. 如果房间变形动画正在播放，先取消动画
+  // 防止用户中途返回主页导致模型停留在缩小状态
+  if (roomTransition) {
+    cancelRoomTransition();
+  }
+
+  // 2. 更新当前视角
+  view = next;
+  window.ADAPT_CURRENT_VIEW = next;
+
+  // 3. 更新 Lenny 的自适应建筑系统
+  adaptive.setView(next);
+
+  // 4. 同步三个房间模型的显示状态
+  syncExperienceModel();
+
+  // 5. 更新环境
+  if (next === 'applications') {
+    makeEnvironment(adaptive.mode());
+  } else {
+    makeEnvironment(
+      next === 'structure' ? 'TECHNOLOGY' : 'ROOFTOP'
+    );
+  }
+
+  // 6. 更新页面 UI
+  document.body.classList.toggle(
+    'exploring',
+    next !== 'home'
+  );
+
+  $('hud').hidden = next === 'home';
+  $('home').hidden = next === 'home';
+
+  // 7. 重置手机陀螺仪基准
+  gyroBase = null;
+
+  // 8. 更新视角标题和描述
+  const t = descriptions[next];
+
+  if (t) {
+
+    $('view-index').textContent = t[0];
+    $('view-title').textContent = t[1];
+    $('view-desc').textContent = t[2];
+
+    // 清除旧按钮
+    $('modes').replaceChildren();
+
+    // 创建当前视角对应的按钮
+    for (const action of actions[next]) {
+
+      const b = document.createElement('button');
+
+      b.textContent = action;
+
+      b.onclick = () => selectAction(action, b);
+
+      $('modes').appendChild(b);
+    }
+
+    // 9. 视角1：高亮当前房间
+    if (next === 'interior') {
+      for (const b of $('modes').children) {
+        b.classList.toggle(
+          'active',
+          b.textContent === currentInteriorMode
+        );
+      }
+    }
+
+    // 10. 视角3：保持当前应用场景的按钮高亮
+    if (next === 'applications') {
+      for (const b of $('modes').children) {
+        b.classList.toggle(
+          'active',
+          b.textContent === adaptive.mode()
+        );
+      }
+    }
+  }
+
+  // 11. 切换摄像机视角
+  moveCamera(next);
+
+  // 12. 更新底部操作提示
+  $('hint').textContent =
+    next === 'interior'
+      ? 'DRAG TO LOOK · ENABLE MOTION ON MOBILE'
+      : next === 'structure'
+        ? 'SELECT A LAYER · DRAG TO ORBIT'
+        : 'DRAG TO ORBIT · PINCH TO ZOOM · ENABLE MOTION';
+}
+
+
+//1.5 version
+function selectAction(action, button) {
+  if (view === 'interior') {
+    if (roomTransition) return;
+    if (action === currentInteriorMode) return;
+
+    if (!getRoomModel(action)) {
+      toast('Room model is still loading');
+      return;
+    }
+
+    button.parentElement
+      .querySelectorAll('button')
+      .forEach(b => b.classList.remove('active'));
+
+    button.classList.add('active');
+
+    startRoomTransition(action);
+    return;
+  }
+
+  // 保留 Lenny 的视角 2 和视角 3 功能
+  button.parentElement
+    .querySelectorAll('button')
+    .forEach(b => b.classList.remove('active'));
+
+  button.classList.add('active');
+
+  if (view === 'applications') {
+    makeEnvironment(action);
+    adaptive.context(action);
+  } else {
+    adaptive.selectFunction(action);
+  }
+}
+
+
 document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>setView(b.dataset.view));$('home').onclick=()=>{setView('home');window.scrollTo(0,0)};$('brand').onclick=()=>{setView('home');window.scrollTo(0,0)};
 canvas.addEventListener('pointerdown',e=>{if(view!=='interior'||transition)return;dragging=true;lastPointer=[e.clientX,e.clientY];canvas.setPointerCapture(e.pointerId)});canvas.addEventListener('pointermove',e=>{if(!dragging||view!=='interior'||transition||!lastPointer)return;interiorYaw-=(e.clientX-lastPointer[0])*.004;interiorPitch=THREE.MathUtils.clamp(interiorPitch-(e.clientY-lastPointer[1])*.004,-1.2,1.2);lastPointer=[e.clientX,e.clientY]});canvas.addEventListener('pointerup',()=>{dragging=false;lastPointer=null});canvas.addEventListener('pointercancel',()=>{dragging=false;lastPointer=null});
 $('gyro').onclick=async()=>{if(gyroEnabled){gyroEnabled=false;gyroBase=null;$('gyro').textContent='ENABLE MOTION';toast('Motion control disabled');return}if(typeof DeviceOrientationEvent==='undefined'){toast('Device orientation is not available in this browser');return}try{if(typeof DeviceOrientationEvent.requestPermission==='function'){const permission=await DeviceOrientationEvent.requestPermission();if(permission!=='granted'){toast('Motion permission was not granted');return}}gyroEnabled=true;gyroBase=null;$('gyro').textContent='MOTION ON';toast('Motion enabled. Rotate the phone to look around.')}catch(e){toast('Motion permission failed: '+e.message)}};
 window.addEventListener('deviceorientation',e=>{if(e.alpha===null||e.beta===null||e.gamma===null)return;deviceAngles={alpha:e.alpha,beta:e.beta,gamma:e.gamma};});
 function gyroRotation(){if(!gyroEnabled||!deviceAngles)return null;const {alpha,beta,gamma}=deviceAngles;const orient=screen.orientation?.angle??window.orientation??0;const euler=new THREE.Euler(THREE.MathUtils.degToRad(beta),THREE.MathUtils.degToRad(alpha),-THREE.MathUtils.degToRad(gamma),'YXZ');const q=new THREE.Quaternion().setFromEuler(euler);q.multiply(new THREE.Quaternion(-Math.sqrt(.5),0,0,Math.sqrt(.5)));q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1),-THREE.MathUtils.degToRad(orient)));if(!gyroBase){gyroBase=q.clone().invert()}return gyroBase.clone().multiply(q)}
-function updateCamera(now){if(transition){const u=transition.duration?Math.min(1,(now-transition.start)/transition.duration):1;const k=u<.5?4*u*u*u:1-Math.pow(-2*u+2,3)/2;camera.position.lerpVectors(transition.fromP,transition.toP,k);orbit.target.lerpVectors(transition.fromT,transition.toT,k);camera.lookAt(orbit.target);if(u>=1){transition=null;gyroBase=null;if(view==='applications'||view==='structure'){orbit.enabled=true;orbit.target.copy(new THREE.Vector3(...targets[view].t));orbit.minDistance=view==='structure'?4:7;orbit.maxDistance=view==='structure'?60:120}else orbit.enabled=false;if(view==='interior'){interiorYaw=0;interiorPitch=0}}return}if(view==='home'){orbit.enabled=false;camera.lookAt(0,1.7,0);return}if(view==='interior'){const base=new THREE.Quaternion().setFromEuler(new THREE.Euler(interiorPitch,interiorYaw,0,'YXZ'));const g=gyroRotation();if(g)base.multiply(g);camera.quaternion.copy(base)}else{orbit.update();if(view==='applications'&&gyroEnabled&&deviceAngles){const g=gyroRotation();if(g){const e=new THREE.Euler().setFromQuaternion(g,'YXZ');const desired=THREE.MathUtils.clamp(e.y,-.6,.6);const delta=desired-gyroOrbitOffset;camera.position.sub(orbit.target).applyAxisAngle(new THREE.Vector3(0,1,0),delta*.12).add(orbit.target);gyroOrbitOffset+=delta*.12;camera.lookAt(orbit.target)}}}}
-function render(now){requestAnimationFrame(render);adaptive.tick(now);updateCamera(now);if(view==='home'&&!transition){const scroll=Math.min(1,scrollY/Math.max(1,innerHeight));camera.position.set(11+scroll*3,6+scroll*2,16+scroll*4);camera.lookAt(0,1.7,0)}renderer.render(scene,camera)}requestAnimationFrame(render);
 
+
+//1.5 version
+  // Cinematic transition controls the camera.
+function updateCamera(now){if(transition){const u=transition.duration?Math.min(1,(now-transition.start)/transition.duration):1;const k=u<.5?4*u*u*u:1-Math.pow(-2*u+2,3)/2;camera.position.lerpVectors(transition.fromP,transition.toP,k);orbit.target.lerpVectors(transition.fromT,transition.toT,k);camera.lookAt(orbit.target);if(u>=1){transition=null;gyroBase=null;if(view==='applications'||view==='structure'){orbit.enabled=true;orbit.target.copy(new THREE.Vector3(...targets[view].t));orbit.minDistance=view==='structure'?4:7;orbit.maxDistance=view==='structure'?60:120}else orbit.enabled=false;if(view==='interior'){interiorYaw=0;interiorPitch=0}}return}if(view==='home'){orbit.enabled=false;camera.lookAt(0,1.7,0);return}if(view==='interior'){const base=new THREE.Quaternion().setFromEuler(new THREE.Euler(interiorPitch,interiorYaw,0,'YXZ'));const g=gyroRotation();if(g)base.multiply(g);camera.quaternion.copy(base)}else{orbit.update();if(view==='applications'&&gyroEnabled&&deviceAngles){const g=gyroRotation();if(g){const e=new THREE.Euler().setFromQuaternion(g,'YXZ');const desired=THREE.MathUtils.clamp(e.y,-.6,.6);const delta=desired-gyroOrbitOffset;camera.position.sub(orbit.target).applyAxisAngle(new THREE.Vector3(0,1,0),delta*.12).add(orbit.target);gyroOrbitOffset+=delta*.12;camera.lookAt(orbit.target)}}}}
+
+
+//1.5 version
+// ===== MAIN RENDER LOOP =====
+
+let renderFrameCount = 0;
+
+function render(now) {
+
+  // 1. 持续请求下一帧
+  requestAnimationFrame(render);
+
+  // 2. 更新 Lenny 的自适应建筑系统
+  adaptive.tick(now);
+
+    // 3. 更新普通摄像机
+    updateCamera(now);
+
+    // 4. 更新电影式空间重组动画
+    updateRoomTransition(now);
+
+  // 5. 临时诊断：强制显示建筑父级
+  // 用于确认是否是 domeRoot 被其他系统隐藏
+  domeRoot.visible = true;
+
+  // 6. 主页摄像机
+  if (view === 'home' && !transition) {
+
+    const scroll = Math.min(
+      1,
+      scrollY / Math.max(1, innerHeight)
+    );
+
+    camera.position.set(
+      11 + scroll * 3,
+      6 + scroll * 2,
+      16 + scroll * 4
+    );
+
+    camera.lookAt(0, 1.7, 0);
+  }
+
+  // 7. 渲染 Three.js 场景
+  renderer.render(scene, camera);
+
+  // 8. 每 120 帧输出一次调试信息
+  renderFrameCount++;
+
+  if (renderFrameCount % 120 === 0) {
+
+    console.log(
+      'RENDER RUNNING',
+      'View:', view,
+      'DomeRoot:', domeRoot.visible,
+      'Camera:', camera.position.toArray(),
+      'Canvas:', renderer.domElement.width,
+      renderer.domElement.height
+    );
+  }
+}
+
+// ===== START RENDER LOOP =====
+
+// 下面两行必须在 render 函数外面
+console.log('STARTING RENDER LOOP');
+requestAnimationFrame(render);
 
 
 //
@@ -288,7 +1103,7 @@ async function loadLivingRoom() {
       }
     });
 
-    domeRoot.add(livingRoom);
+    experienceRoot.add(livingRoom);
 
     
     //1.4 version update: Sync the visibility of the LivingRoom model based on the current interior mode.
