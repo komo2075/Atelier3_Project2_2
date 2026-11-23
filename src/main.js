@@ -42,6 +42,12 @@ const proceduralShell=new THREE.Group();
 // The procedural shell remains as an offline fallback.
 for (const child of [...domeRoot.children]) { if (child!==floor && child!==floorRings) proceduralShell.add(child); }
 domeRoot.add(proceduralShell);
+
+
+//2.4 version
+proceduralShell.visible = false;
+
+
 const baseRing=new THREE.Mesh(new THREE.TorusGeometry(radius,.065,10,120),metal);baseRing.rotation.x=Math.PI/2;domeRoot.add(baseRing);
 const edgeLights=new THREE.PointLight(0xffffff,0,17);edgeLights.position.set(0,3,0);domeRoot.add(edgeLights);
 
@@ -51,20 +57,88 @@ domeRoot.add(inside);
 
 let livingRoom = null;
 
+
+//1.4 version update: Added fitness model loading and interior mode switching. The fitness model is loaded asynchronously and added to the scene when the user selects the "FITNESS" mode. The interior modes can be switched between "LIVING", "GARDEN", and "FITNESS", each with its own unique setup.
+let fitnessModel = null;
+
+async function loadFitness() {
+  const loader = new GLTFLoader();
+
+  try {
+    const gltf = await loader.loadAsync(
+      './public/models/FitnessShell.glb'
+    );
+
+    fitnessModel = gltf.scene;
+    fitnessModel.name = 'FitnessComplete';
+
+    // 保留 Blender 中的原始比例和位置
+    fitnessModel.position.set(0, 0, 0);
+    fitnessModel.scale.set(1, 1, 1);
+
+    fitnessModel.traverse((child) => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+
+    domeRoot.add(fitnessModel);
+
+    syncExperienceModel();
+
+    console.log('Fitness loaded successfully');
+
+  } catch (error) {
+    console.error('Failed to load Fitness:', error);
+    toast('Fitness model failed to load');
+  }
+}
+
+
+//1.4 version
+function syncExperienceModel() {
+  const isFitness = currentInteriorMode === 'FITNESS';
+
+  // 只显示当前空间的模型
+  if (fitnessModel) {
+    fitnessModel.visible = isFitness;
+  }
+
+  if (livingRoom) {
+    livingRoom.visible = !isFitness &&
+      currentInteriorMode === 'LIVING';
+  }
+
+  if (importedDome) {
+    importedDome.visible = !isFitness;
+  }
+
+  // 永远隐藏代码生成的备用半球
+  proceduralShell.visible = false;
+
+  // 隐藏备用地板与装饰圆环
+  floor.visible = false;
+  floorRings.visible = false;
+  baseRing.visible = false;
+}
+
+
 let currentInteriorMode = 'LIVING';
 
 
 function box(w,h,d,x,y,z,color){const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),new THREE.MeshStandardMaterial({color,metalness:.18,roughness:.66}));m.position.set(x,y,z);inside.add(m);return m}
 
 
+
+//1.4 version update: Added interior mode switching and environment switching. The interior is now a separate group, and the procedural shell is hidden when the Blender model is loaded. The camera controls have been refined for better user experience, especially on mobile devices with motion controls.
 function makeInterior(mode) {
   currentInteriorMode = mode;
 
   inside.clear();
 
-  if (livingRoom) {
-    livingRoom.visible = mode === 'LIVING';
-  }
+  // 同时切换建筑和室内
+  syncExperienceModel();
 
   if (mode === 'LIVING') {
     return;
@@ -80,7 +154,9 @@ function makeInterior(mode) {
 
       const plant = new THREE.Mesh(
         new THREE.ConeGeometry(0.3, 0.7, 7),
-        new THREE.MeshStandardMaterial({ color: 0x51c49b })
+        new THREE.MeshStandardMaterial({
+          color: 0x51c49b
+        })
       );
 
       plant.position.set(x, 0.75, z);
@@ -88,24 +164,9 @@ function makeInterior(mode) {
     }
   }
 
-  else if (mode === 'FITNESS') {
-    for (let i = 0; i < 4; i++) {
-      box(0.65, 0.07, 1.7, -2 + i * 1.3, 0.08, 0, 0x4086a3);
-    }
-
-    box(2, 0.12, 0.3, 0, 0.85, -1.8, 0x8faab4);
-  }
-
-  else if (mode === 'EXHIBITION') {
-    for (let i = 0; i < 4; i++) {
-      const panel = box(
-        0.12, 1.9, 1.5,
-        -2 + i * 1.3, 1.05, -1.5,
-        0x4e91a4
-      );
-
-      panel.material.emissive = new THREE.Color(0x16465b);
-    }
+  if (mode === 'FITNESS') {
+    // Fitness 使用导入的完整 GLB 模型
+    return;
   }
 }
 
@@ -155,8 +216,17 @@ function fitCamera(bounds,center,direction,minimumDistance){
 function moveCamera(key,duration=1450){if(matchMedia('(prefers-reduced-motion: reduce)').matches)duration=0;const t=targets[key];transition={start:performance.now(),duration,fromP:camera.position.clone(),toP:new THREE.Vector3(...t.p),fromT:orbit.target.clone(),toT:new THREE.Vector3(...t.t)};orbit.enabled=false}
 function toast(message){$('toast').textContent=message;$('toast').style.display='block';clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').style.display='none',3500)}
 const descriptions={interior:['01 / INTERIOR','INSIDE THE DOME','Look around with your phone or drag. Change the activity mode.'],structure:['02 / TECHNOLOGY','MODULAR SYSTEM','One hexagonal module. Five working layers. Choose a layer to inspect it, or select a function to follow its cycle.'],applications:['03 / APPLICATIONS','ONE SYSTEM. MANY FORMS.','Change the environment. Watch the same modular skin reconfigure into a habitat, tent or mobile cabin.']};
-const actions={interior:['LIVING','GARDEN','FITNESS','EXHIBITION'],structure:['SOLAR','RAINWATER'],applications:['ROOFTOP','WINTER','PARK','HIGHWAY']};
-function setView(next){view=next;adaptive.setView(next);if(next==='applications')makeEnvironment(adaptive.mode());else makeEnvironment(next==='structure'?'TECHNOLOGY':'ROOFTOP');document.body.classList.toggle('exploring',next!=='home');$('hud').hidden=next==='home';$('home').hidden=next==='home';gyroBase=null;const t=descriptions[next];if(t){$('view-index').textContent=t[0];$('view-title').textContent=t[1];$('view-desc').textContent=t[2];$('modes').replaceChildren();for(const action of actions[next]){const b=document.createElement('button');b.textContent=action;b.onclick=()=>selectAction(action,b);$('modes').appendChild(b)}if(next==='interior')$('modes').firstChild?.classList.add('active');if(next==='applications')for(const b of $('modes').children)b.classList.toggle('active',b.textContent===adaptive.mode())}moveCamera(next);$('hint').textContent=next==='interior'?'DRAG TO LOOK · ENABLE MOTION ON MOBILE':next==='structure'?'SELECT A LAYER · DRAG TO ORBIT':'DRAG TO ORBIT · PINCH TO ZOOM · ENABLE MOTION';}
+
+
+//1.4 version update: Added interior mode switching and environment switching. The interior is now a separate group, and the procedural shell is hidden when the Blender model is loaded. The camera controls have been refined for better user experience, especially on mobile devices with motion controls.
+const actions={
+  interior:['LIVING','GARDEN','FITNESS'],
+  structure:['SOLAR','RAINWATER'],
+  applications:['ROOFTOP','WINTER','PARK','HIGHWAY']
+};
+
+
+function setView(next){view=next;syncExperienceModel();adaptive.setView(next);if(next==='applications')makeEnvironment(adaptive.mode());else makeEnvironment(next==='structure'?'TECHNOLOGY':'ROOFTOP');document.body.classList.toggle('exploring',next!=='home');$('hud').hidden=next==='home';$('home').hidden=next==='home';gyroBase=null;const t=descriptions[next];if(t){$('view-index').textContent=t[0];$('view-title').textContent=t[1];$('view-desc').textContent=t[2];$('modes').replaceChildren();for(const action of actions[next]){const b=document.createElement('button');b.textContent=action;b.onclick=()=>selectAction(action,b);$('modes').appendChild(b)}if(next==='interior')$('modes').firstChild?.classList.add('active');if(next==='applications')for(const b of $('modes').children)b.classList.toggle('active',b.textContent===adaptive.mode())}moveCamera(next);$('hint').textContent=next==='interior'?'DRAG TO LOOK · ENABLE MOTION ON MOBILE':next==='structure'?'SELECT A LAYER · DRAG TO ORBIT':'DRAG TO ORBIT · PINCH TO ZOOM · ENABLE MOTION';}
 function selectAction(action,button){button.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('active'));button.classList.add('active');if(view==='interior'){makeInterior(action);toast(`Interior mode: ${action}. Transition animation placeholder.`)}else if(view==='applications'){makeEnvironment(action);adaptive.context(action)}else{adaptive.selectFunction(action)}}
 document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>setView(b.dataset.view));$('home').onclick=()=>{setView('home');window.scrollTo(0,0)};$('brand').onclick=()=>{setView('home');window.scrollTo(0,0)};
 canvas.addEventListener('pointerdown',e=>{if(view!=='interior'||transition)return;dragging=true;lastPointer=[e.clientX,e.clientY];canvas.setPointerCapture(e.pointerId)});canvas.addEventListener('pointermove',e=>{if(!dragging||view!=='interior'||transition||!lastPointer)return;interiorYaw-=(e.clientX-lastPointer[0])*.004;interiorPitch=THREE.MathUtils.clamp(interiorPitch-(e.clientY-lastPointer[1])*.004,-1.2,1.2);lastPointer=[e.clientX,e.clientY]});canvas.addEventListener('pointerup',()=>{dragging=false;lastPointer=null});canvas.addEventListener('pointercancel',()=>{dragging=false;lastPointer=null});
@@ -204,8 +274,9 @@ async function loadLivingRoom() {
 
     domeRoot.add(livingRoom);
 
-    livingRoom.visible =
-      currentInteriorMode === 'LIVING';
+    
+    //1.4 version update: Sync the visibility of the LivingRoom model based on the current interior mode.
+    syncExperienceModel();
 
     console.log('LivingRoom loaded successfully');
 
@@ -241,20 +312,77 @@ export async function loadDomeGLB(url='./public/models/source-dome.glb') {
   if(importedDome) domeRoot.remove(importedDome);
   importedDome=model;
   domeRoot.add(model);
+
+
+  //1.4 version update: Hide the procedural shell and floor components when the Blender model is loaded, as they are no longer needed.
   proceduralShell.visible=false;
   floor.visible=false;
   floorRings.visible=false;
   baseRing.visible=false;
+
+  syncExperienceModel();
+
   return model;
+
+
 }
-loadDomeGLB().catch(err=>{console.error('Could not load Blender dome:',err);toast('GLB load failed. Showing procedural fallback dome.')});
 
 
+//1.4 version
+// 视角1使用 LivingRoom.glb 自带的完整建筑
+// 不再额外加载 source-dome.glb
+// loadDomeGLB().catch(err=>{console.error('Could not load Blender dome:',err);toast('GLB load failed.')});
+
+
+//1.4 version
 //1.3version
+// Load experience models
 loadLivingRoom();
+loadFitness();
 
 
-window.ADAPT_DEBUG={scene,camera,domeRoot,setView,loadDomeGLB,adaptive};
+//1.4 version
+window.ADAPT_DEBUG = {
+  scene,
+  camera,
+  domeRoot,
+  setView,
+  loadDomeGLB,
+  adaptive,
+
+  inspectModels() {
+    const result = [];
+
+    scene.traverse((object) => {
+      if (!object.isMesh && !object.isGroup) return;
+
+      const name = object.name || '(unnamed)';
+
+      if (
+        object === importedDome ||
+        object === proceduralShell ||
+        object === fitnessModel ||
+        object === livingRoom ||
+        name.toLowerCase().includes('dome') ||
+        name.toLowerCase().includes('shell') ||
+        name.toLowerCase().includes('frame')
+      ) {
+        result.push({
+          name,
+          type: object.type,
+          visible: object.visible,
+          worldVisible: object.visible &&
+            object.parent?.visible !== false,
+          parent: object.parent?.name || '(unnamed)'
+        });
+      }
+    });
+
+    console.table(result);
+    return result;
+  }
+};
+
 
 // Keep the canvas between controls instead of drawing the model underneath them.
 let layoutFrame=0,stageKey='';
